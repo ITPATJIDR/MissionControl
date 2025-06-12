@@ -1,0 +1,65 @@
+{
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devPath": "http://localhost:1420",
+    "distDir": "../dist"
+  },
+  "package": {
+    "productName": "MissionControl",
+    "version": "0.1.0"
+  },
+  "tauri": {
+    "allowlist": {
+      "all": false,
+      "shell": {
+        "all": false,
+        "open": true
+      },
+      "window": {
+        "all": false,
+        "close": true,
+        "hide": true,
+        "show": true,
+        "maximize": true,
+        "minimize": true,
+        "unmaximize": true,
+        "unminimize": true,
+        "startDragging": true,
+        "setPosition": true,
+        "setSize": true,
+        "setAlwaysOnTop": true
+      }
+    },
+    "windows": [
+      {
+        "title": "MissionControl",
+        "width": 320,
+        "height": 480,
+        "minWidth": 280,
+        "minHeight": 120,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "resizable": true,
+        "transparent": true,
+        "skipTaskbar": true,
+        "center": false,
+        "x": 100,
+        "y": 100
+      }
+    ],
+    "security": {
+      "csp": null
+    },
+    "bundle": {
+      "active": true,
+      "targets": "all",
+      "identifier": "com.MissionControl.mvp",
+      "icon": [
+        "icons/icon32x32.png",
+        "icons/icon128x128.png",
+        "icons/icon.png"
+      ]
+    }
+  }
+}
