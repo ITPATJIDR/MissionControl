@@ -48,7 +48,7 @@ A minimalistic, always-on-top task manager and Pomodoro timer built with Tauri, 
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/ITPATJIDR/MissionControl.git
+   git clone https://github.com/ITPATJIDR/MissionControl
    cd MissionControl
    ```
 
@@ -143,7 +143,7 @@ We welcome contributions! Here's how you can help make MissionControl better:
 ### Setting up Development Environment
 ```bash
 # Clone your fork
-git clone https://github.com/ITPATJIDR/MissionControl.git
+git clone https://github.com/ITPATJIDR/MissionControl
 
 # Install dependencies
 npm install
@@ -171,9 +171,9 @@ If MissionControl helps boost your productivity, consider supporting its develop
 ### 💝 Ways to Support
 
 #### 💰 Financial Support
-- **GitHub Sponsors**: [Sponsor on GitHub](https://github.com/sponsors/yourusername)
-- **Buy Me a Coffee**: [Support the developer](https://buymeacoffee.com/yourusername)
-- **PayPal**: [One-time donation](https://paypal.me/yourusername)
+- **GitHub Sponsors**: [Sponsor on GitHub](https://github.com/sponsors/ITPATJIDR)
+<!-- - **Buy Me a Coffee**: [Support the developer](https://buymeacoffee.com/yourusername)
+- **PayPal**: [One-time donation](https://paypal.me/yourusername) -->
 
 #### 🌟 Non-Financial Support
 - ⭐ **Star the Repository**: Show your appreciation
