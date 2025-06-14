@@ -34,8 +34,8 @@
     "windows": [
       {
         "title": "MissionControl",
-        "width": 320,
-        "height": 480,
+        "width": 1400,
+        "height": 600,
         "minWidth": 280,
         "minHeight": 120,
         "decorations": false,

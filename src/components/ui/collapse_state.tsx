@@ -36,7 +36,7 @@ const CollapseState = ({
 }: CollapseStateProps) => {
   return (
         <div
-          className="flex items-center bg-[#171c25] justify-between p-4 rounded-xl transition-all duration-300 h-14 w-full"
+          className="flex items-center bg-[#171c25] justify-between p-4 rounded-xl transition-all duration-300 h-14 w-[380px]"
           onMouseDown={handleDragStart}
           onMouseEnter={() => handleHover(true)}
           onMouseLeave={() => handleHover(false)}

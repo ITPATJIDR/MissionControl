@@ -17,7 +17,7 @@ const FocusState = ({ focusedTodo, remainingTime, isPaused }: FocusStateProps) =
   return (
     <motion.div
       key="default"
-      className="flex w-[90vw] items-center justify-between"
+      className="flex w-[350px] items-center justify-between"
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -10 }}
