@@ -15,12 +15,14 @@ pub struct Todo {
     pub completed: bool,
     pub time: i32, // time in minutes
     pub created_at: String,
+    pub project_id: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CreateTodo {
     pub text: String,
     pub time: i32,
+    pub project_id: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -36,12 +38,28 @@ pub struct ExcalidrawData {
     pub elements: String, // JSON string of elements
     pub app_state: String, // JSON string of app state
     pub updated_at: String,
+    pub project_id: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SaveExcalidrawData {
     pub elements: String,
     pub app_state: String,
+    pub project_id: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Project {
+    pub id: i64,
+    pub name: String,
+    pub description: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateProject {
+    pub name: String,
+    pub description: Option<String>,
 }
 
 // Database state - using Arc<Mutex> for thread safety
@@ -157,7 +175,8 @@ async fn init_database(database: State<'_, Database>) -> Result<String, String> 
                         text TEXT NOT NULL,
                         completed INTEGER NOT NULL DEFAULT 0,
                         time INTEGER NOT NULL DEFAULT 25,
-                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        project_id INTEGER REFERENCES projects(id) DEFAULT 1
                     )
                     "#,
                 )
@@ -182,7 +201,8 @@ async fn init_database(database: State<'_, Database>) -> Result<String, String> 
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         elements TEXT NOT NULL,
                         app_state TEXT NOT NULL,
-                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        project_id INTEGER REFERENCES projects(id) DEFAULT 1
                     )
                     "#,
                 )
@@ -198,6 +218,45 @@ async fn init_database(database: State<'_, Database>) -> Result<String, String> 
                     println!("New database table 'excalidraw_data' created successfully");
                 } else {
                     println!("Table 'excalidraw_data' verified/exists");
+                }
+
+                // Create projects table
+                sqlx::query(
+                    r#"
+                    CREATE TABLE IF NOT EXISTS projects (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL UNIQUE,
+                        description TEXT,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                    "#,
+                )
+                .execute(&pool)
+                .await
+                .map_err(|e| {
+                    let error_msg = format!("Failed to create projects table: {}", e);
+                    println!("{}", error_msg);
+                    error_msg
+                })?;
+
+                // Create default project if none exists
+                let project_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM projects")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap_or(0);
+
+                if project_count == 0 {
+                    sqlx::query("INSERT INTO projects (name, description) VALUES (?, ?)")
+                        .bind("Default Project")
+                        .bind("Your first project")
+                        .execute(&pool)
+                        .await
+                        .map_err(|e| {
+                            let error_msg = format!("Failed to create default project: {}", e);
+                            println!("{}", error_msg);
+                            error_msg
+                        })?;
+                    println!("Default project created");
                 }
 
                 // Set the pool and mark as initialized
@@ -258,13 +317,118 @@ async fn get_pool(database: &State<'_, Database>) -> Result<SqlitePool, String> 
     }
 }
 
-// Get all todos - ASCENDING order (oldest first)
+// Get all projects
 #[tauri::command]
-async fn get_todos(database: State<'_, Database>) -> Result<Vec<Todo>, String> {
+async fn get_projects(database: State<'_, Database>) -> Result<Vec<Project>, String> {
     let pool = get_pool(&database).await?;
 
-    // Sort by created_at ASC (oldest first), then by id ASC as secondary sort
-    let rows = sqlx::query("SELECT id, text, completed, time, created_at FROM todos ORDER BY created_at ASC, id ASC")
+    let rows = sqlx::query("SELECT id, name, description, created_at FROM projects ORDER BY created_at ASC")
+        .fetch_all(&pool)
+        .await
+        .map_err(|e| {
+            let error_msg = format!("Failed to fetch projects: {}", e);
+            println!("{}", error_msg);
+            error_msg
+        })?;
+
+    let projects: Vec<Project> = rows
+        .into_iter()
+        .map(|row| Project {
+            id: row.get("id"),
+            name: row.get("name"),
+            description: row.get("description"),
+            created_at: row.get("created_at"),
+        })
+        .collect();
+    Ok(projects)
+}
+
+// Create a new project
+#[tauri::command]
+async fn create_project(project: CreateProject, database: State<'_, Database>) -> Result<Project, String> {
+    let pool = get_pool(&database).await?;
+
+    let result = sqlx::query(
+        "INSERT INTO projects (name, description) VALUES (?, ?) RETURNING id, name, description, created_at"
+    )
+    .bind(&project.name)
+    .bind(&project.description)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| {
+        let error_msg = format!("Failed to create project: {}", e);
+        println!("{}", error_msg);
+        error_msg
+    })?;
+
+    let new_project = Project {
+        id: result.get("id"),
+        name: result.get("name"),
+        description: result.get("description"),
+        created_at: result.get("created_at"),
+    };
+
+    Ok(new_project)
+}
+
+// Delete a project
+#[tauri::command]
+async fn delete_project(id: i64, database: State<'_, Database>) -> Result<(), String> {
+    let pool = get_pool(&database).await?;
+
+    // Don't allow deleting the last project
+    let project_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM projects")
+        .fetch_one(&pool)
+        .await
+        .unwrap_or(0);
+
+    if project_count <= 1 {
+        return Err("Cannot delete the last project".to_string());
+    }
+
+    // Delete all todos in this project
+    sqlx::query("DELETE FROM todos WHERE project_id = ?")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .map_err(|e| {
+            let error_msg = format!("Failed to delete todos for project: {}", e);
+            println!("{}", error_msg);
+            error_msg
+        })?;
+
+    // Delete excalidraw data for this project
+    sqlx::query("DELETE FROM excalidraw_data WHERE project_id = ?")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .map_err(|e| {
+            let error_msg = format!("Failed to delete excalidraw data for project: {}", e);
+            println!("{}", error_msg);
+            error_msg
+        })?;
+
+    // Delete the project
+    sqlx::query("DELETE FROM projects WHERE id = ?")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .map_err(|e| {
+            let error_msg = format!("Failed to delete project: {}", e);
+            println!("{}", error_msg);
+            error_msg
+        })?;
+
+    Ok(())
+}
+
+// Get all todos - ASCENDING order (oldest first)
+#[tauri::command]
+async fn get_todos(project_id: i64, database: State<'_, Database>) -> Result<Vec<Todo>, String> {
+    let pool = get_pool(&database).await?;
+
+    let rows = sqlx::query("SELECT id, text, completed, time, created_at, project_id FROM todos WHERE project_id = ? ORDER BY created_at ASC, id ASC")
+        .bind(project_id)
         .fetch_all(&pool)
         .await
         .map_err(|e| {
@@ -280,9 +444,10 @@ async fn get_todos(database: State<'_, Database>) -> Result<Vec<Todo>, String> {
             Todo {
                 id: row.get("id"),
                 text: row.get("text"),
-                completed: completed_int != 0, // Convert INTEGER to bool
+                completed: completed_int != 0,
                 time: row.get("time"),
                 created_at: row.get("created_at"),
+                project_id: row.get("project_id"),
             }
         })
         .collect();
@@ -295,10 +460,11 @@ async fn create_todo(todo: CreateTodo, database: State<'_, Database>) -> Result<
     let pool = get_pool(&database).await?;
 
     let result = sqlx::query(
-        "INSERT INTO todos (text, time, completed) VALUES (?, ?, 0) RETURNING id, text, completed, time, created_at"
+        "INSERT INTO todos (text, time, completed, project_id) VALUES (?, ?, 0, ?) RETURNING id, text, completed, time, created_at, project_id"
     )
     .bind(&todo.text)
     .bind(todo.time)
+    .bind(todo.project_id)
     .fetch_one(&pool)
     .await
     .map_err(|e| {
@@ -311,9 +477,10 @@ async fn create_todo(todo: CreateTodo, database: State<'_, Database>) -> Result<
     let new_todo = Todo {
         id: result.get("id"),
         text: result.get("text"),
-        completed: completed_int != 0, // Convert INTEGER to bool
+        completed: completed_int != 0,
         time: result.get("time"),
         created_at: result.get("created_at"),
+        project_id: result.get("project_id"),
     };
 
     Ok(new_todo)
@@ -380,6 +547,7 @@ async fn update_todo(id: i64, update: UpdateTodo, database: State<'_, Database>)
         completed: completed_int != 0, // Convert INTEGER to bool
         time: result.get("time"),
         created_at: result.get("created_at"),
+        project_id: result.get("project_id"),
     };
 
     Ok(updated_todo)
@@ -411,8 +579,9 @@ async fn save_excalidraw_data(
 ) -> Result<(), String> {
     let pool = get_pool(&database).await?;
 
-    // Delete existing data (we only keep one drawing)
-    sqlx::query("DELETE FROM excalidraw_data")
+    // Delete existing data for this project
+    sqlx::query("DELETE FROM excalidraw_data WHERE project_id = ?")
+        .bind(data.project_id)
         .execute(&pool)
         .await
         .map_err(|e| {
@@ -423,10 +592,11 @@ async fn save_excalidraw_data(
 
     // Insert new data
     sqlx::query(
-        "INSERT INTO excalidraw_data (elements, app_state) VALUES (?, ?)"
+        "INSERT INTO excalidraw_data (elements, app_state, project_id) VALUES (?, ?, ?)"
     )
     .bind(&data.elements)
     .bind(&data.app_state)
+    .bind(data.project_id)
     .execute(&pool)
     .await
     .map_err(|e| {
@@ -435,16 +605,17 @@ async fn save_excalidraw_data(
         error_msg
     })?;
 
-    println!("Excalidraw data saved successfully");
+    println!("Excalidraw data saved successfully for project {}", data.project_id);
     Ok(())
 }
 
 // Get Excalidraw data
 #[tauri::command]
-async fn get_excalidraw_data(database: State<'_, Database>) -> Result<Option<ExcalidrawData>, String> {
+async fn get_excalidraw_data(project_id: i64, database: State<'_, Database>) -> Result<Option<ExcalidrawData>, String> {
     let pool = get_pool(&database).await?;
 
-    let row = sqlx::query("SELECT id, elements, app_state, updated_at FROM excalidraw_data ORDER BY updated_at DESC LIMIT 1")
+    let row = sqlx::query("SELECT id, elements, app_state, updated_at, project_id FROM excalidraw_data WHERE project_id = ? ORDER BY updated_at DESC LIMIT 1")
+        .bind(project_id)
         .fetch_optional(&pool)
         .await
         .map_err(|e| {
@@ -460,6 +631,7 @@ async fn get_excalidraw_data(database: State<'_, Database>) -> Result<Option<Exc
                 elements: row.get("elements"),
                 app_state: row.get("app_state"),
                 updated_at: row.get("updated_at"),
+                project_id: row.get("project_id"),
             };
             Ok(Some(data))
         }
@@ -475,6 +647,9 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             init_database,
+            get_projects,
+            create_project,
+            delete_project,
             get_todos,
             create_todo,
             update_todo,
