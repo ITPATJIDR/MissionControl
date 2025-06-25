@@ -22,6 +22,7 @@ pub struct Todo {
 pub struct CreateTodo {
     pub text: String,
     pub time: i32,
+    #[serde(rename = "projectId")]
     pub project_id: i64,
 }
 
@@ -45,6 +46,7 @@ pub struct ExcalidrawData {
 pub struct SaveExcalidrawData {
     pub elements: String,
     pub app_state: String,
+    #[serde(rename = "projectId")]
     pub project_id: i64,
 }
 
@@ -456,15 +458,20 @@ async fn get_todos(project_id: i64, database: State<'_, Database>) -> Result<Vec
 
 // Create a new todo
 #[tauri::command]
-async fn create_todo(todo: CreateTodo, database: State<'_, Database>) -> Result<Todo, String> {
+async fn create_todo(
+    text: String,
+    time: i32,
+    project_id: i64,
+    database: State<'_, Database>
+) -> Result<Todo, String> {
     let pool = get_pool(&database).await?;
 
     let result = sqlx::query(
         "INSERT INTO todos (text, time, completed, project_id) VALUES (?, ?, 0, ?) RETURNING id, text, completed, time, created_at, project_id"
     )
-    .bind(&todo.text)
-    .bind(todo.time)
-    .bind(todo.project_id)
+    .bind(&text)
+    .bind(time)
+    .bind(project_id)
     .fetch_one(&pool)
     .await
     .map_err(|e| {
@@ -528,7 +535,7 @@ async fn update_todo(id: i64, update: UpdateTodo, database: State<'_, Database>)
 
     query_builder.push(" WHERE id = ");
     query_builder.push_bind(id);
-    query_builder.push(" RETURNING id, text, completed, time, created_at");
+    query_builder.push(" RETURNING id, text, completed, time, created_at, project_id");
 
     let query = query_builder.build();
     let result = query
@@ -571,17 +578,21 @@ async fn delete_todo(id: i64, database: State<'_, Database>) -> Result<(), Strin
     Ok(())
 }
 
-// Save Excalidraw data
+// Save Excalidraw data - Allow saving empty canvases
 #[tauri::command]
 async fn save_excalidraw_data(
-    data: SaveExcalidrawData,
+    elements: String,
+    app_state: String,
+    project_id: i64,
     database: State<'_, Database>,
 ) -> Result<(), String> {
     let pool = get_pool(&database).await?;
 
+    println!("Saving Excalidraw data for project: {}", project_id);
+
     // Delete existing data for this project
     sqlx::query("DELETE FROM excalidraw_data WHERE project_id = ?")
-        .bind(data.project_id)
+        .bind(project_id)
         .execute(&pool)
         .await
         .map_err(|e| {
@@ -590,13 +601,13 @@ async fn save_excalidraw_data(
             error_msg
         })?;
 
-    // Insert new data
+    // Insert new data (even if empty - this ensures project isolation)
     sqlx::query(
         "INSERT INTO excalidraw_data (elements, app_state, project_id) VALUES (?, ?, ?)"
     )
-    .bind(&data.elements)
-    .bind(&data.app_state)
-    .bind(data.project_id)
+    .bind(&elements)
+    .bind(&app_state)
+    .bind(project_id)
     .execute(&pool)
     .await
     .map_err(|e| {
@@ -605,7 +616,7 @@ async fn save_excalidraw_data(
         error_msg
     })?;
 
-    println!("Excalidraw data saved successfully for project {}", data.project_id);
+    println!("Excalidraw data saved successfully for project {}", project_id);
     Ok(())
 }
 
@@ -633,9 +644,13 @@ async fn get_excalidraw_data(project_id: i64, database: State<'_, Database>) -> 
                 updated_at: row.get("updated_at"),
                 project_id: row.get("project_id"),
             };
+            println!("Found Excalidraw data for project {}: {} elements", project_id, data.elements.len());
             Ok(Some(data))
         }
-        None => Ok(None),
+        None => {
+            println!("No Excalidraw data found for project {}", project_id);
+            Ok(None)
+        }
     }
 }
 

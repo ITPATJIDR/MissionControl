@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { appWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/tauri";
 import { X } from "lucide-react";
@@ -42,6 +42,18 @@ function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
   const [isProjectSelectorOpen, setIsProjectSelectorOpen] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
+
+  // Add a ref to track the project during saves
+  const currentProjectRef = useRef<Project | null>(null);
+
+  // Add a ref to track the last saved state
+  const lastSavedElements = useRef<string>('');
+
+  // Update the ref whenever currentProject changes
+  useEffect(() => {
+    currentProjectRef.current = currentProject;
+  }, [currentProject]);
 
   // Initialize database and load todos on app start
   useEffect(() => {
@@ -71,12 +83,131 @@ function App() {
     appWindow.center();
   }, []);
 
-  // Load Excalidraw data when API is ready OR when we need to reload
+  // Simplified auto-save effect - only save when there are actual changes
+  useEffect(() => {
+    if (!excalidrawAPI || !excalidrawInitialized || shouldReloadExcalidraw || !currentProject) return;
+
+    const saveExcalidrawData = async (force = false) => {
+      try {
+        const elements = excalidrawAPI.getSceneElements();
+        const appState = excalidrawAPI.getAppState();
+        
+        const currentElementsString = JSON.stringify(elements);
+        
+        // Only save if there are actual changes (or forced)
+        if (!force && currentElementsString === lastSavedElements.current) {
+          return; // No changes, skip save
+        }
+
+        setSaveStatus('saving');
+
+        await invoke('save_excalidraw_data', {
+          elements: currentElementsString,
+          appState: JSON.stringify({
+            zenModeEnabled: appState.zenModeEnabled,
+            viewBackgroundColor: appState.viewBackgroundColor,
+          }),
+          projectId: currentProject.id
+        });
+        
+        // Update the last saved state
+        lastSavedElements.current = currentElementsString;
+        
+        console.log('Excalidraw data auto-saved for project:', currentProject.id);
+        setSaveStatus('success');
+        
+        // Clear success status after 2 seconds
+        setTimeout(() => setSaveStatus('idle'), 2000);
+      } catch (error) {
+        console.error('Failed to auto-save Excalidraw data:', error);
+        setSaveStatus('error');
+        setTimeout(() => setSaveStatus('idle'), 3000);
+      }
+    };
+
+    // Check for changes every 2 seconds and save if needed
+    const interval = setInterval(() => {
+      const elements = excalidrawAPI.getSceneElements();
+      const currentElementsString = JSON.stringify(elements);
+      
+      if (currentElementsString !== lastSavedElements.current) {
+        saveExcalidrawData();
+      }
+    }, 2000);
+
+    // Save on app close/unload
+    const handleBeforeUnload = () => {
+      if (!shouldReloadExcalidraw) {
+        saveExcalidrawData(true); // Force save on close
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [excalidrawAPI, excalidrawInitialized, shouldReloadExcalidraw, currentProject]);
+
+  // Handle project switching - save current data and load new project data
+  useEffect(() => {
+    if (currentProject) {
+      console.log('Current project changed to:', currentProject.id, currentProject.name);
+      
+      // Save current Excalidraw data before switching if API is ready
+      const saveBeforeSwitch = async () => {
+        if (excalidrawAPI && excalidrawInitialized && !shouldReloadExcalidraw) {
+          try {
+            const elements = excalidrawAPI.getSceneElements();
+            const appState = excalidrawAPI.getAppState();
+            const currentElementsString = JSON.stringify(elements);
+
+            // Save to the previous project if there was one and there are changes
+            const previousProjectId = currentProjectRef.current?.id;
+            if (previousProjectId && previousProjectId !== currentProject.id && currentElementsString !== lastSavedElements.current) {
+              setSaveStatus('saving');
+              
+              await invoke('save_excalidraw_data', {
+                elements: currentElementsString,
+                appState: JSON.stringify({
+                  zenModeEnabled: appState.zenModeEnabled,
+                  viewBackgroundColor: appState.viewBackgroundColor,
+                }),
+                projectId: previousProjectId
+              });
+              
+              console.log('Saved Excalidraw data for previous project:', previousProjectId);
+              setSaveStatus('success');
+              setTimeout(() => setSaveStatus('idle'), 1000);
+            }
+          } catch (error) {
+            console.error('Failed to save before project switch:', error);
+            setSaveStatus('error');
+            setTimeout(() => setSaveStatus('idle'), 2000);
+          }
+        }
+        
+        // Load todos for new project
+        loadTodos();
+        
+        // Reset excalidraw state to force reload of new project data
+        setExcalidrawInitialized(false);
+        setShouldReloadExcalidraw(true);
+      };
+
+      saveBeforeSwitch();
+    }
+  }, [currentProject]);
+
+  // Update lastSavedElements when loading data
   useEffect(() => {
     const loadExcalidrawData = async () => {
       if (excalidrawAPI && currentProject && (!excalidrawInitialized || shouldReloadExcalidraw)) {
         try {
           console.log('Loading Excalidraw data for project:', currentProject.id);
+          setSaveStatus('idle'); // Clear any previous save status
+          
           const savedData = await invoke<any>('get_excalidraw_data', { projectId: currentProject.id });
 
           if (savedData) {
@@ -93,14 +224,21 @@ function App() {
               }
             });
 
-            console.log('Excalidraw data restored successfully');
+            // Update the last saved state
+            lastSavedElements.current = savedData.elements;
+
+            console.log('Excalidraw data restored successfully for project:', currentProject.id);
           } else {
             // Clear the canvas if no data for this project
             excalidrawAPI.updateScene({
               elements: [],
               appState: { zenModeEnabled: false }
             });
-            console.log('No saved Excalidraw data found for project');
+            
+            // Reset last saved state
+            lastSavedElements.current = '[]';
+            
+            console.log('No saved Excalidraw data found for project:', currentProject.id);
           }
 
           setExcalidrawInitialized(true);
@@ -114,56 +252,6 @@ function App() {
     };
 
     loadExcalidrawData();
-  }, [excalidrawAPI, excalidrawInitialized, shouldReloadExcalidraw, currentProject]);
-
-  // Modify auto-save to be more careful about when it saves
-  useEffect(() => {
-    if (!excalidrawAPI || !excalidrawInitialized || shouldReloadExcalidraw || !currentProject) return;
-
-    const saveExcalidrawData = async () => {
-      try {
-        const elements = excalidrawAPI.getSceneElements();
-        const appState = excalidrawAPI.getAppState();
-
-        if (elements.length > 0) {
-          await invoke('save_excalidraw_data', {
-            data: {
-              elements: JSON.stringify(elements),
-              app_state: JSON.stringify({
-                zenModeEnabled: appState.zenModeEnabled,
-                viewBackgroundColor: appState.viewBackgroundColor,
-              }),
-              project_id: currentProject.id
-            }
-          });
-          console.log('Excalidraw data auto-saved for project:', currentProject.id);
-        }
-      } catch (error) {
-        console.error('Failed to auto-save Excalidraw data:', error);
-      }
-    };
-
-    // Auto-save every 30 seconds
-    const interval = setInterval(saveExcalidrawData, 30000);
-
-    // Save on app close/unload
-    const handleBeforeUnload = () => {
-      // Only save if we're not in the middle of reloading
-      if (!shouldReloadExcalidraw) {
-        saveExcalidrawData();
-      }
-    };
-
-    window.addEventListener('beforeunload', handleBeforeUnload);
-
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-      // Don't save on cleanup if we're reloading to avoid race conditions
-      if (!shouldReloadExcalidraw) {
-        saveExcalidrawData();
-      }
-    };
   }, [excalidrawAPI, excalidrawInitialized, shouldReloadExcalidraw, currentProject]);
 
   const loadTodos = async () => {
@@ -287,11 +375,9 @@ function App() {
       try {
         console.log('Creating todo:', text, 'for project:', currentProject.id);
         const newTodo = await invoke<Todo>('create_todo', {
-          todo: {
-            text: text.trim(),
-            time: 25,
-            project_id: currentProject.id
-          }
+          text: text.trim(),
+          time: 25,
+          projectId: currentProject.id
         });
         console.log('Todo created:', newTodo);
 
@@ -381,15 +467,6 @@ function App() {
     }
   };
 
-  // Load todos when current project changes
-  useEffect(() => {
-    if (currentProject) {
-      loadTodos();
-      // Reset excalidraw to reload data for new project
-      setShouldReloadExcalidraw(true);
-    }
-  }, [currentProject]);
-
   // Add project management functions
   const createProject = async (name: string, description?: string) => {
     try {
@@ -466,10 +543,9 @@ function App() {
           isPaused={isPaused}
         />
       ) : (
-        <div className="flex-col w-full h-screen"
-        >
-          <div className="absolute top-0 right-0 bg-[#171c25] flex rounded-t-2xl justify-end"
-          >
+        <div className="flex-col w-full h-screen">
+          {/* RESTORE THE CLOSE BUTTON */}
+          <div className="absolute top-0 right-0 bg-[#171c25] flex rounded-t-2xl justify-end z-50">
             <button
               onClick={handleClose}
               onMouseDown={(e) => e.stopPropagation()}
@@ -479,6 +555,7 @@ function App() {
               <X className="w-4 h-4 text-gray-400 group-hover:text-white" />
             </button>
           </div>
+          
           <div className="flex w-full h-screen">
             <div
               className="w-[300px] h-screen bg-[#171c25] overflow-hidden shadow-2xl flex flex-col"
@@ -527,12 +604,36 @@ function App() {
                 </div>
               </div>
             </div>
-            <div className="w-[1100px] h-screen bg-[#171c25] p-12">
+            
+            {/* Excalidraw area with save status */}
+            <div className="w-[1100px] h-screen bg-[#171c25] p-12 relative">
               <Excalidraw
                 excalidrawAPI={(api: ExcalidrawImperativeAPI) => {
                   setExcalidrawAPI(api);
                 }}
               />
+              
+              {/* Save Status Indicator - Subtle text only in bottom right */}
+              {saveStatus !== 'idle' && (
+                <div 
+                  className={`fixed bottom-2 right-2 px-3 py-1 rounded text-sm font-medium transition-all duration-300 z-50 ${
+                    saveStatus === 'saving' 
+                      ? 'text-blue-400' 
+                      : saveStatus === 'success' 
+                      ? 'text-green-400' 
+                      : 'text-red-400'
+                  }`}
+                  style={{ 
+                    opacity: 0.7,
+                    backgroundColor: 'rgba(0, 0, 0, 0.3)',
+                    backdropFilter: 'blur(4px)'
+                  }}
+                >
+                  {saveStatus === 'saving' && 'Saving...'}
+                  {saveStatus === 'success' && 'Saved'}
+                  {saveStatus === 'error' && 'Save Failed'}
+                </div>
+              )}
             </div>
           </div>
         </div>
