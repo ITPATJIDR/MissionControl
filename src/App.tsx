@@ -50,6 +50,9 @@ function App() {
   // Add a ref to track the last saved state
   const lastSavedElements = useRef<string>('');
 
+  // Add a flag to prevent concurrent saves
+  const isSaving = useRef<boolean>(false);
+
   // Update the ref whenever currentProject changes
   useEffect(() => {
     currentProjectRef.current = currentProject;
@@ -59,10 +62,8 @@ function App() {
   useEffect(() => {
     const initializeApp = async () => {
       try {
-        console.log('Initializing app...');
         // Initialize database
         const initResult = await invoke<string>('init_database');
-        console.log('Database init result:', initResult);
 
         // Small delay to ensure database is ready
         await new Promise(resolve => setTimeout(resolve, 100));
@@ -72,7 +73,6 @@ function App() {
         
         setError(null);
       } catch (error) {
-        console.error('Failed to initialize app:', error);
         setError(`Failed to initialize app: ${error}`);
       } finally {
         setIsLoading(false);
@@ -83,12 +83,25 @@ function App() {
     appWindow.center();
   }, []);
 
+  // Debug effect to track state changes
+  useEffect(() => {
+    // Effect for tracking state changes
+  }, [excalidrawAPI, excalidrawInitialized, shouldReloadExcalidraw, currentProject, isCollapsed]);
+
   // Simplified auto-save effect - only save when there are actual changes
   useEffect(() => {
-    if (!excalidrawAPI || !excalidrawInitialized || shouldReloadExcalidraw || !currentProject) return;
+    if (!excalidrawAPI || !excalidrawInitialized || shouldReloadExcalidraw || !currentProject) {
+      return;
+    }
 
     const saveExcalidrawData = async (force = false) => {
+      // Prevent concurrent saves
+      if (isSaving.current) {
+        return;
+      }
+
       try {
+        isSaving.current = true;
         const elements = excalidrawAPI.getSceneElements();
         const appState = excalidrawAPI.getAppState();
         
@@ -97,6 +110,13 @@ function App() {
         // Only save if there are actual changes (or forced)
         if (!force && currentElementsString === lastSavedElements.current) {
           return; // No changes, skip save
+        }
+
+        // For non-forced saves, only save if there are elements
+        // For forced saves (like on app close), save regardless
+        const hasElements = elements && elements.length > 0;
+        if (!force && !hasElements) {
+          return; // Don't save empty canvas unless forced
         }
 
         setSaveStatus('saving');
@@ -113,31 +133,33 @@ function App() {
         // Update the last saved state
         lastSavedElements.current = currentElementsString;
         
-        console.log('Excalidraw data auto-saved for project:', currentProject.id);
         setSaveStatus('success');
         
         // Clear success status after 2 seconds
         setTimeout(() => setSaveStatus('idle'), 2000);
       } catch (error) {
-        console.error('Failed to auto-save Excalidraw data:', error);
         setSaveStatus('error');
         setTimeout(() => setSaveStatus('idle'), 3000);
+      } finally {
+        isSaving.current = false;
       }
     };
 
     // Check for changes every 2 seconds and save if needed
     const interval = setInterval(() => {
-      const elements = excalidrawAPI.getSceneElements();
-      const currentElementsString = JSON.stringify(elements);
-      
-      if (currentElementsString !== lastSavedElements.current) {
-        saveExcalidrawData();
+      if (!isSaving.current) {
+        const elements = excalidrawAPI.getSceneElements();
+        const currentElementsString = JSON.stringify(elements);
+        
+        if (currentElementsString !== lastSavedElements.current) {
+          saveExcalidrawData();
+        }
       }
     }, 2000);
 
     // Save on app close/unload
     const handleBeforeUnload = () => {
-      if (!shouldReloadExcalidraw) {
+      if (!shouldReloadExcalidraw && !isSaving.current) {
         saveExcalidrawData(true); // Force save on close
       }
     };
@@ -153,8 +175,6 @@ function App() {
   // Handle project switching - save current data and load new project data
   useEffect(() => {
     if (currentProject) {
-      console.log('Current project changed to:', currentProject.id, currentProject.name);
-      
       // Save current Excalidraw data before switching if API is ready
       const saveBeforeSwitch = async () => {
         if (excalidrawAPI && excalidrawInitialized && !shouldReloadExcalidraw) {
@@ -177,12 +197,10 @@ function App() {
                 projectId: previousProjectId
               });
               
-              console.log('Saved Excalidraw data for previous project:', previousProjectId);
               setSaveStatus('success');
               setTimeout(() => setSaveStatus('idle'), 1000);
             }
           } catch (error) {
-            console.error('Failed to save before project switch:', error);
             setSaveStatus('error');
             setTimeout(() => setSaveStatus('idle'), 2000);
           }
@@ -204,18 +222,22 @@ function App() {
   useEffect(() => {
     const loadExcalidrawData = async () => {
       if (excalidrawAPI && currentProject && (!excalidrawInitialized || shouldReloadExcalidraw)) {
+        console.log('loading excalidraw data');
+        console.log('excalidrawAPI', currentProject.id);
         try {
-          console.log('Loading Excalidraw data for project:', currentProject.id);
           setSaveStatus('idle'); // Clear any previous save status
           
           const savedData = await invoke<any>('get_excalidraw_data', { projectId: currentProject.id });
 
           if (savedData) {
+            console.log("HI");
             const elements = JSON.parse(savedData.elements);
             const appState = JSON.parse(savedData.app_state);
 
             await new Promise(resolve => setTimeout(resolve, 100));
 
+            console.log('elements', elements);
+            console.log('appState', appState);
             excalidrawAPI.updateScene({
               elements,
               appState: {
@@ -226,9 +248,8 @@ function App() {
 
             // Update the last saved state
             lastSavedElements.current = savedData.elements;
-
-            console.log('Excalidraw data restored successfully for project:', currentProject.id);
           } else {
+            console.log("NO DATA");
             // Clear the canvas if no data for this project
             excalidrawAPI.updateScene({
               elements: [],
@@ -237,14 +258,11 @@ function App() {
             
             // Reset last saved state
             lastSavedElements.current = '[]';
-            
-            console.log('No saved Excalidraw data found for project:', currentProject.id);
           }
 
           setExcalidrawInitialized(true);
           setShouldReloadExcalidraw(false);
         } catch (error) {
-          console.error('Failed to load Excalidraw data:', error);
           setExcalidrawInitialized(true);
           setShouldReloadExcalidraw(false);
         }
@@ -258,12 +276,9 @@ function App() {
     if (!currentProject) return;
     
     try {
-      console.log('Loading todos for project:', currentProject.id);
       const dbTodos = await invoke<Todo[]>('get_todos', { projectId: currentProject.id });
-      console.log('Loaded todos:', dbTodos);
       setTodos(dbTodos);
     } catch (error) {
-      console.error('Failed to load todos:', error);
       setError(`Failed to load todos: ${error}`);
     }
   };
@@ -293,22 +308,113 @@ function App() {
   }, [isCollapsed, focusedTodo, remainingTime, isPaused]);
 
   const handleCollapse = () => {
-    console.log("handleCollapse");
     const wasCollapsed = isCollapsed;
-    setIsCollapsed(!isCollapsed);
-    setIsPaused(false); // Reset pause when returning to todo list
     
-    // Trigger reload when returning from collapsed state
-    if (wasCollapsed) {
-      setShouldReloadExcalidraw(true);
-    }
+    // Save current Excalidraw data before triggering reload when returning from collapsed state
+    const saveAndToggle = async () => {
+      if (wasCollapsed && excalidrawAPI && excalidrawInitialized && currentProject) {
+        try {
+          // Wait for any ongoing save to complete
+          while (isSaving.current) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+
+          isSaving.current = true;
+          const elements = excalidrawAPI.getSceneElements();
+          const appState = excalidrawAPI.getAppState();
+          const currentElementsString = JSON.stringify(elements);
+          
+          // Only save if there are changes AND there are actual elements to save
+          const hasElements = elements && elements.length > 0;
+          const hasChanges = currentElementsString !== lastSavedElements.current;
+          
+          if (hasChanges && hasElements) {
+            setSaveStatus('saving');
+            
+            await invoke('save_excalidraw_data', {
+              elements: currentElementsString,
+              appState: JSON.stringify({
+                zenModeEnabled: appState.zenModeEnabled,
+                viewBackgroundColor: appState.viewBackgroundColor,
+              }),
+              projectId: currentProject.id
+            });
+            
+            // Update the last saved state
+            lastSavedElements.current = currentElementsString;
+            setSaveStatus('success');
+            setTimeout(() => setSaveStatus('idle'), 1000);
+          }
+        } catch (error) {
+          setSaveStatus('error');
+          setTimeout(() => setSaveStatus('idle'), 2000);
+        } finally {
+          isSaving.current = false;
+        }
+      }
+      
+      setIsCollapsed(!isCollapsed);
+      setIsPaused(false); // Reset pause when returning to todo list
+      
+      // Trigger reload when returning from collapsed state
+      if (wasCollapsed) {
+        // Reset both flags to ensure proper reload
+        setExcalidrawInitialized(false);
+        setShouldReloadExcalidraw(true);
+      }
+    };
+    
+    saveAndToggle();
   };
 
   const handleClose = async () => {
     await appWindow.close();
   };
 
-  const handleFocus = (todo: Todo) => {
+  const handleFocus = async (todo: Todo) => {
+    // Save current Excalidraw data before going to focus mode
+    if (excalidrawAPI && excalidrawInitialized && currentProject && !shouldReloadExcalidraw) {
+      try {
+        // Wait for any ongoing save to complete
+        while (isSaving.current) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+
+        isSaving.current = true;
+        const elements = excalidrawAPI.getSceneElements();
+        const appState = excalidrawAPI.getAppState();
+        const currentElementsString = JSON.stringify(elements);
+        
+        // Only save if there are changes AND there are actual elements to save
+        // This prevents saving empty canvas over existing content
+        const hasElements = elements && elements.length > 0;
+        const hasChanges = currentElementsString !== lastSavedElements.current;
+        
+        if (hasChanges && hasElements) {
+          setSaveStatus('saving');
+          
+          await invoke('save_excalidraw_data', {
+            elements: currentElementsString,
+            appState: JSON.stringify({
+              zenModeEnabled: appState.zenModeEnabled,
+              viewBackgroundColor: appState.viewBackgroundColor,
+            }),
+            projectId: currentProject.id
+          });
+          
+          // Update the last saved state
+          lastSavedElements.current = currentElementsString;
+          setSaveStatus('success');
+          setTimeout(() => setSaveStatus('idle'), 1000);
+        }
+      } catch (error) {
+        setSaveStatus('error');
+        setTimeout(() => setSaveStatus('idle'), 2000);
+      } finally {
+        isSaving.current = false;
+      }
+    }
+
     setFocusedTodo(todo);
     setRemainingTime(todo.time * 60); // convert minutes to seconds
     setIsPaused(false);
@@ -373,19 +479,16 @@ function App() {
   const addTodo = async (text: string) => {
     if (text.trim() && currentProject) {
       try {
-        console.log('Creating todo:', text, 'for project:', currentProject.id);
         const newTodo = await invoke<Todo>('create_todo', {
           text: text.trim(),
           time: 25,
           projectId: currentProject.id
         });
-        console.log('Todo created:', newTodo);
 
         await loadTodos();
         setIsAddingTask(false);
         setError(null);
       } catch (error) {
-        console.error('Failed to create todo:', error);
         setError(`Failed to create todo: ${error}`);
       }
     }
@@ -397,7 +500,6 @@ function App() {
       setTodos(todos.filter(todo => todo.id !== id));
       setError(null);
     } catch (error) {
-      console.error('Failed to delete todo:', error);
       setError(`Failed to delete todo: ${error}`);
     }
   };
@@ -416,7 +518,6 @@ function App() {
         setError(null);
       }
     } catch (error) {
-      console.error('Failed to toggle todo:', error);
       setError(`Failed to toggle todo: ${error}`);
     }
   };
@@ -438,7 +539,6 @@ function App() {
       ));
       setError(null);
     } catch (error) {
-      console.error('Failed to update todo:', error);
       setError(`Failed to update todo: ${error}`);
     }
   };
@@ -452,9 +552,7 @@ function App() {
   // Load projects and set current project
   const loadProjects = async () => {
     try {
-      console.log('Loading projects...');
       const dbProjects = await invoke<Project[]>('get_projects');
-      console.log('Loaded projects:', dbProjects);
       setProjects(dbProjects);
       
       // Set the first project as current if none is selected
@@ -462,7 +560,6 @@ function App() {
         setCurrentProject(dbProjects[0]);
       }
     } catch (error) {
-      console.error('Failed to load projects:', error);
       setError(`Failed to load projects: ${error}`);
     }
   };
@@ -478,7 +575,6 @@ function App() {
       setError(null);
       return newProject;
     } catch (error) {
-      console.error('Failed to create project:', error);
       setError(`Failed to create project: ${error}`);
       throw error;
     }
@@ -497,7 +593,6 @@ function App() {
       }
       setError(null);
     } catch (error) {
-      console.error('Failed to delete project:', error);
       setError(`Failed to delete project: ${error}`);
       throw error;
     }
