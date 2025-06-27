@@ -63,7 +63,7 @@ function App() {
     const initializeApp = async () => {
       try {
         // Initialize database
-        const initResult = await invoke<string>('init_database');
+        await invoke<string>('init_database');
 
         // Small delay to ensure database is ready
         await new Promise(resolve => setTimeout(resolve, 100));
@@ -222,22 +222,17 @@ function App() {
   useEffect(() => {
     const loadExcalidrawData = async () => {
       if (excalidrawAPI && currentProject && (!excalidrawInitialized || shouldReloadExcalidraw)) {
-        console.log('loading excalidraw data');
-        console.log('excalidrawAPI', currentProject.id);
         try {
           setSaveStatus('idle'); // Clear any previous save status
           
           const savedData = await invoke<any>('get_excalidraw_data', { projectId: currentProject.id });
 
           if (savedData) {
-            console.log("HI");
             const elements = JSON.parse(savedData.elements);
             const appState = JSON.parse(savedData.app_state);
 
             await new Promise(resolve => setTimeout(resolve, 100));
 
-            console.log('elements', elements);
-            console.log('appState', appState);
             excalidrawAPI.updateScene({
               elements,
               appState: {
@@ -249,7 +244,6 @@ function App() {
             // Update the last saved state
             lastSavedElements.current = savedData.elements;
           } else {
-            console.log("NO DATA");
             // Clear the canvas if no data for this project
             excalidrawAPI.updateScene({
               elements: [],
@@ -479,7 +473,7 @@ function App() {
   const addTodo = async (text: string) => {
     if (text.trim() && currentProject) {
       try {
-        const newTodo = await invoke<Todo>('create_todo', {
+        await invoke<Todo>('create_todo', {
           text: text.trim(),
           time: 25,
           projectId: currentProject.id
