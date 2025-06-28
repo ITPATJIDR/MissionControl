@@ -1,4 +1,4 @@
-use sqlx::{sqlite::SqlitePool, Row};
+use sqlx::{sqlite::SqlitePool};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tauri::State;
